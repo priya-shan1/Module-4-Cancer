@@ -143,3 +143,6 @@ SKCM_metadata = metadata_df.loc[cancer_samples]
 SKCM_merged = SKCM_gene_data.T.merge(
     SKCM_metadata, left_index=True, right_index=True)
 # %%
+#use gene data, and use merged if you want to color 
+#x is the main data and y is just for coloring, not necessary
+#use 2 components 
