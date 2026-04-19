@@ -5,6 +5,7 @@ import seaborn as sns
 import numpy as np # Numpy
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 # %%
 data = pd.read_csv(
     r'/Users/priya/Documents/Comp_Bio/GitHub/Module-4-Cancer/data/TRAINING_SET_GSE62944_subsample_log2TPM.csv', index_col=0, header=0)  # can also use larger dataset with more genes
@@ -139,10 +140,44 @@ for gene in desired_gene_list:
         print(f"Warning: {gene} not found in the dataset.")
 SKCM_gene_data = SKCM_data.loc[gene_list]
 # %%
+#only use this if you want to color by something for visualizations, otherwise just use the gene data 
 SKCM_metadata = metadata_df.loc[cancer_samples]
 SKCM_merged = SKCM_gene_data.T.merge(
     SKCM_metadata, left_index=True, right_index=True)
 # %%
 #use gene data, and use merged if you want to color 
 #x is the main data and y is just for coloring, not necessary
-#use 2 components 
+#use 2 components
+X = SKCM_merged[gene_list] # gene expression only
+SKCM_merged['OS_group'] = pd.qcut(
+SKCM_merged['OS.time'],
+q=3,
+labels=["Low survival", "Medium survival", "High survival"]
+)
+
+y = SKCM_merged['OS_group']
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+pca = PCA(n_components=2)
+X_pca = pca.fit_transform(X_scaled)
+
+
+plt.figure(figsize=(8, 6))
+sns.scatterplot(
+x=X_pca[:, 0],
+y=X_pca[:, 1],
+hue=y,
+palette="Set2",
+s=80
+)
+
+plt.title("PCA of SKCM Gene Expression Data")
+plt.xlabel("Principal Component 1")
+plt.ylabel("Principal Component 2")
+plt.legend(title="Survival Group")
+plt.show()
+
+
+# %%
