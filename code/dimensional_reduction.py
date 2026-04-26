@@ -6,11 +6,15 @@ import numpy as np # Numpy
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LassoCV
+from sklearn.linear_model import RidgeCV
 # %%
 data = pd.read_csv(
     r'/Users/priya/Documents/Comp_Bio/GitHub/Module-4-Cancer/data/TRAINING_SET_GSE62944_subsample_log2TPM.csv', index_col=0, header=0)  # can also use larger dataset with more genes
 metadata_df = pd.read_csv(
     r'/Users/priya/Documents/Comp_Bio/GitHub/Module-4-Cancer/data/TRAINING_SET_GSE62944_metadata.csv', index_col=0, header=0)
+valid_data = pd.read_csv(r'/Users/priya/Documents/Comp_Bio/GitHub/Module-4-Cancer/data/VALIDATION_SET_GSE62944_subsample_log2TPM.csv', index_col=0, header=0)
+valid_metadata_df = pd.read_csv(r'/Users/priya/Documents/Comp_Bio/GitHub/Module-4-Cancer/data/VALIDATION_SET_GSE62944_metadata.csv', index_col=0, header=0)
 cancer_type = 'SKCM'  # Skin Cutaneous Melanoma
 # From metadata, get the rows where "cancer_type" is equal to the specified cancer type
 # Then grab the index of this subset (these are the sample IDs)
@@ -148,11 +152,21 @@ SKCM_merged = SKCM_gene_data.T.merge(
 #use gene data, and use merged if you want to color 
 #x is the main data and y is just for coloring, not necessary
 #use 2 components
+
 X = SKCM_merged[gene_list] # gene expression only
-SKCM_merged['OS_group'] = pd.qcut(
-SKCM_merged['OS.time'],
-q=3,
-labels=["Low survival", "Medium survival", "High survival"]
+#SKCM_merged['OS_group'] = pd.qcut(
+#SKCM_merged['OS.time'],
+#q=2,
+#labels=["Low survival", "High survival"]
+#)
+#high survival = 9 years, intermediate = 4 years, low=0 years - these are cutoffs based on the distribution of survival times in the dataset, you can adjust these as needed for your analysis
+bins = [0, 1460, 3285, np.inf]
+labels = ["Low survival", "Intermediate", "High survival"]
+
+SKCM_merged['OS_group'] = pd.cut(
+    SKCM_merged['OS.time'], 
+    bins=bins, 
+    labels=labels
 )
 
 y = SKCM_merged['OS_group']
@@ -180,4 +194,96 @@ plt.legend(title="Survival Group")
 plt.show()
 
 
+# %%
+X = SKCM_merged[gene_list]
+
+# Use continuous survival time directly
+y = SKCM_merged['OS.time']
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+pca = PCA(n_components=2)
+X_pca = pca.fit_transform(X_scaled)
+
+plt.figure(figsize=(8, 6))
+
+scatter = plt.scatter(
+    X_pca[:, 0],
+    X_pca[:, 1],
+    c=y,                 # continuous values
+    cmap='viridis',      # continuous colormap
+    s=80
+)
+
+plt.title("PCA of SKCM Gene Expression Data")
+plt.xlabel("Principal Component 1")
+plt.ylabel("Principal Component 2")
+
+# Add colorbar instead of legend
+cbar = plt.colorbar(scatter)
+cbar.set_label("Overall Survival Time")
+
+plt.show()
+# %%
+#fitting training data to supervised learning regression model 
+clean_df = SKCM_merged.dropna(subset=['OS.time'] + gene_list)
+# Re-define X and y from the cleaned dataframe
+X = clean_df[gene_list]
+y = clean_df['OS.time']
+# OS time is often skewed; predicting log(time) is usually more stable
+y_log = np.log1p(y)
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+# 5. Fit LassoCV (Cross-Validated Lasso)
+# cv=5 means it will test different 'alpha' penalty values automatically
+alphas = np.logspace(-6, 3, 100)
+# Ridge is better when genes are correlated (common in signaling pathways)
+ridge_model = RidgeCV(alphas=alphas, cv=5)
+ridge_model.fit(X_scaled, y_log)
+
+# 3. Check the new scores
+print(f"Best Alpha: {ridge_model.alpha_:.6f}")
+#in sample error 
+print(f"Training R^2: {ridge_model.score(X_scaled, y_log):.3f}")
+
+#model = LassoCV(cv=5, random_state=42, max_iter=10000)
+#model.fit(X_train_scaled, y_train)
+#print(f"Best Alpha: {model.alpha_}")
+#print(f"Training R^2: {model.score(X_train_scaled, y_train):.3f}")
+#print(f"Test R^2: {model.score(X_test_scaled, y_test):.3f}")
+# %%
+#using validation set to test the model - out of sample error 
+valid_cancer_samples = valid_metadata_df[valid_metadata_df['cancer_type'] == cancer_type].index
+print(len(valid_cancer_samples))
+valid_SKCM_data = valid_data[valid_cancer_samples]
+gene_list = [gene for gene in desired_gene_list if gene in valid_SKCM_data.index]
+for gene in desired_gene_list:
+    if gene not in gene_list:
+        print(f"Warning: {gene} not found in the dataset.")
+valid_SKCM_gene_data = valid_SKCM_data.loc[gene_list]
+valid_SKCM_metadata = valid_metadata_df.loc[valid_cancer_samples]
+valid_SKCM_merged = valid_SKCM_gene_data.T.merge(
+    valid_SKCM_metadata, left_index=True, right_index=True)
+clean_valid_SKCM_merged = valid_SKCM_merged.dropna(subset=['OS.time'] + gene_list)
+X_valid = clean_valid_SKCM_merged[gene_list]
+y_valid = clean_valid_SKCM_merged['OS.time']
+y_valid_log = np.log1p(y_valid)
+X_valid_scaled = scaler.transform(X_valid)
+out_of_sample_r2 = ridge_model.score(X_valid_scaled, y_valid_log)
+print(f"Validation R^2: {out_of_sample_r2:.3f}")
+# %%
+# Create a series of the coefficients linked to gene names
+coef_series = pd.Series(ridge_model.coef_, index=X.columns)
+
+# Filter for the genes that the model actually kept (non-zero)
+active_genes = coef_series[coef_series != 0].sort_values(ascending=False)
+
+print(f"\nModel selected {len(active_genes)} genes out of {len(gene_list)}")
+print("Top 5 Genes associated with LONGER survival:")
+print(active_genes.head(5))
+
+print("\nTop 5 Genes associated with SHORTER survival:")
+print(active_genes.tail(5))
 # %%
